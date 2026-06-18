@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HTML 태그 검사기 — 열림/닫힘 태그 오류 체크</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #1a1d27;
+    --panel-2: #232735;
+    --border: #2d3242;
+    --text: #e6e8ef;
+    --muted: #9aa0b0;
+    --accent: #5b8cff;
+    --accent-h: #7aa2ff;
+    --ok: #3fb950;
+    --err: #f85149;
+    --warn: #d29922;
+    --mono: ui-monospace, SFMono-Regular, "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, "Malgun Gothic", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  header {
+    padding: 28px 24px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { margin: 0 0 6px; font-size: 22px; }
+  header p { margin: 0; color: var(--muted); font-size: 14px; }
+  main { max-width: 1000px; margin: 0 auto; padding: 24px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  input[type=text] {
+    flex: 1; min-width: 240px;
+    background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    padding: 11px 13px; border-radius: 8px; font-size: 14px; outline: none;
+  }
+  input[type=text]:focus { border-color: var(--accent); }
+  textarea {
+    width: 100%; min-height: 280px; resize: vertical;
+    background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    padding: 13px; border-radius: 8px; font-family: var(--mono); font-size: 13px;
+    line-height: 1.6; outline: none; tab-size: 2;
+  }
+  textarea:focus { border-color: var(--accent); }
+  button {
+    background: var(--accent); color: #fff; border: none; cursor: pointer;
+    padding: 11px 18px; border-radius: 8px; font-size: 14px; font-weight: 600;
+  }
+  button:hover { background: var(--accent-h); }
+  button.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  button.secondary:hover { background: var(--border); }
+  label.field { font-size: 13px; color: var(--muted); display: block; margin: 16px 0 6px; }
+  .summary {
+    margin-top: 20px; padding: 14px 16px; border-radius: 10px; font-weight: 600;
+    border: 1px solid var(--border); background: var(--panel);
+  }
+  .summary.ok { color: var(--ok); border-color: rgba(63,185,80,.4); }
+  .summary.err { color: var(--err); border-color: rgba(248,81,73,.4); }
+  .issues { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .issue {
+    background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--err);
+    padding: 10px 14px; border-radius: 8px; font-size: 14px;
+  }
+  .issue.warn { border-left-color: var(--warn); }
+  .issue .loc { font-family: var(--mono); color: var(--accent-h); font-size: 12px; }
+  .issue .tag { font-family: var(--mono); background: var(--panel-2); padding: 1px 6px; border-radius: 4px; }
+  .issue .snippet { display: block; margin-top: 6px; font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: pre-wrap; word-break: break-all; }
+  .hint { color: var(--muted); font-size: 13px; margin-top: 8px; }
+  .spinner { color: var(--muted); font-size: 14px; margin-top: 16px; }
+  a { color: var(--accent-h); }
+  .tag-list { font-family: var(--mono); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🏷️ HTML 태그 검사기</h1>
+  <p>사이트 URL 또는 HTML 코드를 입력하면 열림/닫힘 태그의 짝이 맞는지 검사합니다.</p>
+</header>
+<main>
+  <div class="row">
+    <input type="text" id="url" placeholder="https://example.com  (URL을 입력하고 불러오기를 누르세요)">
+    <button id="fetchBtn">URL 불러오기</button>
+  </div>
+  <p class="hint">※ 브라우저 보안(CORS)으로 직접 불러오지 못하면 공개 프록시로 자동 재시도합니다. 그래도 안 되면 페이지 소스를 복사해 아래에 붙여넣으세요.</p>
+
+  <label class="field" for="code">HTML 코드</label>
+  <textarea id="code" placeholder="여기에 HTML 코드를 붙여넣으세요..." spellcheck="false"></textarea>
+
+  <div class="row" style="margin-top:14px;">
+    <button id="checkBtn">태그 검사하기</button>
+    <button id="sampleBtn" class="secondary">예제 넣기</button>
+    <button id="clearBtn" class="secondary">지우기</button>
+  </div>
+
+  <div id="result"></div>
+</main>
+
+<script>
+// ---- 검사 대상이 아닌(닫힘 태그가 없는) void 요소 ----
+const VOID = new Set(['area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr']);
+// ---- 내부를 원시 텍스트로 취급하는 요소 (내부의 <태그>를 파싱하지 않음) ----
+const RAWTEXT = new Set(['script','style','textarea','title']);
+// ---- 선택적으로 닫을 수 있는 요소(닫힘 누락을 오류 대신 경고로 완화) ----
+const OPTIONAL_CLOSE = new Set(['li','dt','dd','p','option','thead','tbody','tfoot','tr','td','th','colgroup','head','body','html','optgroup']);
+
+function escapeHtml(s) {
+  return s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+}
+
+// 문자열 인덱스 -> 줄/열 번호
+function lineColOf(src, idx) {
+  let line = 1, col = 1;
+  for (let i = 0; i < idx && i < src.length; i++) {
+    if (src[i] === '\n') { line++; col = 1; } else { col++; }
+  }
+  return { line, col };
+}
+
+function checkHtml(src) {
+  const issues = [];
+  const stack = [];        // { name, index } 열려 있는 태그들
+  let i = 0;
+  const n = src.length;
+
+  while (i < n) {
+    const lt = src.indexOf('<', i);
+    if (lt === -1) break;
+
+    // 주석 / 조건부 주석
+    if (src.startsWith('<!--', lt)) {
+      const end = src.indexOf('-->', lt + 4);
+      i = end === -1 ? n : end + 3;
+      continue;
+    }
+    // <!DOCTYPE ...> 또는 <!...>
+    if (src[lt + 1] === '!') {
+      const end = src.indexOf('>', lt);
+      i = end === -1 ? n : end + 1;
+      continue;
+    }
+    // <?xml ... ?> 처리 명령
+    if (src[lt + 1] === '?') {
+      const end = src.indexOf('>', lt);
+      i = end === -1 ? n : end + 1;
+      continue;
+    }
+
+    // 태그 이름 시작인지 확인
+    const isClose = src[lt + 1] === '/';
+    const nameStart = lt + (isClose ? 2 : 1);
+    const m = /^[a-zA-Z][a-zA-Z0-9:-]*/.exec(src.slice(nameStart));
+    if (!m) { i = lt + 1; continue; } // '<' 가 태그가 아님 (예: a < b)
+
+    const name = m[0].toLowerCase();
+
+    // 태그 끝 '>' 찾기 (따옴표 속성값 안의 '>' 고려)
+    let j = nameStart + m[0].length;
+    let quote = null;
+    while (j < n) {
+      const ch = src[j];
+      if (quote) { if (ch === quote) quote = null; }
+      else if (ch === '"' || ch === "'") quote = ch;
+      else if (ch === '>') break;
+      j++;
+    }
+    if (j >= n) {
+      issues.push(mkIssue('error', name, lt, src, `'<${isClose ? '/' : ''}${name}' 태그의 닫는 '>' 를 찾지 못했습니다.`));
+      break;
+    }
+
+    const selfClosing = src[j - 1] === '/';
+    const after = j + 1;
+
+    if (isClose) {
+      // ----- 닫힘 태그 처리 -----
+      // 스택에서 일치하는 열림 태그 탐색
+      let found = -1;
+      for (let k = stack.length - 1; k >= 0; k--) {
+        if (stack[k].name === name) { found = k; break; }
+      }
+      if (found === -1) {
+        issues.push(mkIssue('error', name, lt, src,
+          `닫힘 태그 </${name}> 에 대응하는 열림 태그가 없습니다.`));
+      } else {
+        // found 위에 쌓인(닫히지 않은) 태그들 보고
+        for (let k = stack.length - 1; k > found; k--) {
+          const t = stack[k];
+          const level = OPTIONAL_CLOSE.has(t.name) ? 'warn' : 'error';
+          issues.push(mkIssue(level, t.name, t.index, src,
+            `<${t.name}> 가 닫히지 않은 채 </${name}> 를 만났습니다 (닫힘 태그 누락 또는 순서 오류).`));
+        }
+        stack.length = found; // found 포함 그 위로 모두 제거
+      }
+      i = after;
+      continue;
+    }
+
+    // ----- 열림 태그 처리 -----
+    if (!selfClosing && !VOID.has(name)) {
+      stack.push({ name, index: lt });
+    }
+
+    i = after;
+
+    // 원시 텍스트 요소: 대응하는 닫힘까지 건너뜀
+    if (!selfClosing && RAWTEXT.has(name)) {
+      const closeRe = new RegExp('</' + name + '\\b', 'i');
+      const rest = src.slice(after);
+      const mm = closeRe.exec(rest);
+      if (mm) {
+        // 닫힘 태그 위치로 이동 → 다음 루프에서 정상 처리되도록 stack 유지
+        i = after + mm.index;
+      } else {
+        issues.push(mkIssue('error', name, lt, src, `<${name}> 의 닫힘 태그 </${name}> 를 찾지 못했습니다.`));
+        stack.pop();
+        i = n;
+      }
+    }
+  }
+
+  // 끝까지 닫히지 않은 태그들
+  for (let k = stack.length - 1; k >= 0; k--) {
+    const t = stack[k];
+    const level = OPTIONAL_CLOSE.has(t.name) ? 'warn' : 'error';
+    issues.push(mkIssue(level, t.name, t.index, src,
+      `<${t.name}> 가 끝까지 닫히지 않았습니다 (</${t.name}> 누락).`));
+  }
+
+  return issues;
+}
+
+function mkIssue(level, name, index, src, message) {
+  const { line, col } = lineColOf(src, index);
+  const snippet = src.slice(index, Math.min(index + 60, src.length)).replace(/\n/g, '↵');
+  return { level, name, line, col, message, snippet };
+}
+
+function render(issues, meta) {
+  const result = document.getElementById('result');
+  const errors = issues.filter(x => x.level === 'error');
+  const warns = issues.filter(x => x.level === 'warn');
+
+  let html = '';
+  if (issues.length === 0) {
+    html += `<div class="summary ok">✅ 태그 오류를 찾지 못했습니다. ${meta || ''}</div>`;
+  } else {
+    const cls = errors.length ? 'err' : 'ok';
+    html += `<div class="summary ${cls}">` +
+      `🔎 오류 ${errors.length}건` + (warns.length ? `, 경고 ${warns.length}건` : '') +
+      ` 발견 ${meta || ''}</div>`;
+  }
+
+  if (issues.length) {
+    // 줄 번호 순 정렬
+    issues.sort((a, b) => a.line - b.line || a.col - b.col);
+    html += '<div class="issues">';
+    for (const it of issues) {
+      html += `<div class="issue ${it.level === 'warn' ? 'warn' : ''}">` +
+        `<span class="loc">${it.line}행 ${it.col}열</span> · ` +
+        `<span class="tag">&lt;${escapeHtml(it.name)}&gt;</span> ${escapeHtml(it.message)}` +
+        `<span class="snippet">${escapeHtml(it.snippet)}</span></div>`;
+    }
+    html += '</div>';
+  }
+  result.innerHTML = html;
+}
+
+// ---- URL 불러오기 (CORS 프록시 폴백 포함) ----
+async function fetchUrl(url) {
+  const result = document.getElementById('result');
+  result.innerHTML = '<div class="spinner">⏳ 불러오는 중...</div>';
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+
+  const attempts = [
+    url,
+    'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
+    'https://corsproxy.io/?url=' + encodeURIComponent(url),
+  ];
+  for (let a = 0; a < attempts.length; a++) {
+    try {
+      const res = await fetch(attempts[a], { redirect: 'follow' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const text = await res.text();
+      if (text && text.trim()) {
+        document.getElementById('code').value = text;
+        return text;
+      }
+    } catch (e) { /* 다음 방법 시도 */ }
+  }
+  result.innerHTML = '<div class="summary err">❌ URL을 불러오지 못했습니다. 페이지 소스를 직접 복사해 붙여넣어 주세요.</div>';
+  return null;
+}
+
+// ---- 이벤트 ----
+document.getElementById('checkBtn').addEventListener('click', () => {
+  const code = document.getElementById('code').value;
+  if (!code.trim()) { render([], '— 입력된 HTML이 없습니다.'); return; }
+  render(checkHtml(code), `(총 ${code.split('\n').length}행 검사).`);
+});
+
+document.getElementById('fetchBtn').addEventListener('click', async () => {
+  const url = document.getElementById('url').value.trim();
+  if (!url) return;
+  const text = await fetchUrl(url);
+  if (text) render(checkHtml(text), `(${url} · ${text.split('\n').length}행 검사).`);
+});
+
+document.getElementById('clearBtn').addEventListener('click', () => {
+  document.getElementById('code').value = '';
+  document.getElementById('url').value = '';
+  document.getElementById('result').innerHTML = '';
+});
+
+document.getElementById('sampleBtn').addEventListener('click', () => {
+  document.getElementById('code').value =
+`<!DOCTYPE html>
+<html>
+<head>
+  <title>예제</title>
+</head>
+<body>
+  <div class="wrap">
+    <ul>
+      <li>항목 1</li>
+      <li>항목 2
+    </ul>
+    <p>닫지 않은 문단
+    <span>강조</div>
+  <br>
+  <img src="x.png">
+</body>
+</html>`;
+});
+
+document.getElementById('url').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('fetchBtn').click();
+});
+</script>
+</body>
+</html>
